@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react"
 import { Button } from "../components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
-import { Mic, MicOff, Clock, Calendar, ChevronLeft, ChevronRight, Quote, Image as ImageIcon } from "lucide-react"
+import { Mic, MicOff, Clock, Calendar, ChevronLeft, ChevronRight, Quote, Image as ImageIcon, Music } from "lucide-react"
 // import { BlobBackground } from "../components/ui/bg"
 
 // Emotion types
@@ -29,6 +29,19 @@ interface CalendarDay {
 // Add API URL constant at the top
 const API_URL = 'http://127.0.0.1:5000';
 
+// Add this CSS class near the top of the file, after imports
+const imageContainerStyle = {
+  position: 'fixed',
+  left: '20px',
+  bottom: '20px',
+  zIndex: 50,
+  maxWidth: '300px',
+  borderRadius: '8px',
+  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+  backgroundColor: 'white',
+  padding: '8px'
+} as const;
+
 export default function VoiceJournal() {
   // State for recording
   const [isRecording, setIsRecording] = useState(false)
@@ -51,6 +64,10 @@ export default function VoiceJournal() {
   // State for image generation
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [generatedImage, setGeneratedImage] = useState<string | null>(null)
+
+  // State for music generation
+  const [isGeneratingMusic, setIsGeneratingMusic] = useState(false)
+  const [generatedMusic, setGeneratedMusic] = useState<string | null>(null)
 
   // Refs for recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -524,14 +541,13 @@ export default function VoiceJournal() {
   const emotionProps = getEmotionAnimationProps(currentEmotion)
   const selectedEntry = journalEntries.find((entry) => entry.id === selectedEntryId)
 
+  
   // Generate image
   const generateImage = async () => {
     if (!transcript) return;
     
     setIsGeneratingImage(true);
     try {
-      console.log('Sending request to generate image for:', transcript);
-      
       const response = await fetch('http://127.0.0.1:5000/image', {
         method: 'POST',
         headers: {
@@ -541,19 +557,51 @@ export default function VoiceJournal() {
       });
 
       if (!response.ok) throw new Error('Image generation failed');
-
-      console.log('Response received:', response);
+      
       const blob = await response.blob();
-      console.log('Image blob:', blob);
-      
       const imageUrl = URL.createObjectURL(blob);
-      console.log('Generated image URL:', imageUrl);
-      
       setGeneratedImage(imageUrl);
     } catch (error) {
       console.error('Error generating image:', error);
     } finally {
       setIsGeneratingImage(false);
+    }
+  };
+
+  // Generate music
+  const generateMusic = async () => {
+    if (!transcript) return;
+    
+    setIsGeneratingMusic(true);
+    try {
+      // Encode the transcript for URL parameters
+      const encodedText = encodeURIComponent(transcript);
+      const response = await fetch(`http://127.0.0.1:5000/music?text=${encodedText}`);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 429) {
+          // Handle rate limit error
+          console.error('Rate limit error:', errorData.error);
+          // You could show this error to the user with a toast notification
+          alert(errorData.error);
+          return;
+        }
+        throw new Error(errorData.error || 'Music generation failed');
+      }
+      
+      const data = await response.json();
+      console.log('Audio URL:', data.audioUrl);
+      setGeneratedMusic(data.audioUrl);
+      
+      // Create and play audio element
+      const audio = new Audio(data.audioUrl);
+      audio.play();
+    } catch (error) {
+      console.error('Error generating music:', error);
+      alert('Failed to generate music. Please try again later.');
+    } finally {
+      setIsGeneratingMusic(false);
     }
   };
 
@@ -764,6 +812,30 @@ export default function VoiceJournal() {
                 )}
               </div>
             )}
+
+            {/* Music generation button */}
+            {transcript && (
+              <div className="w-full flex flex-col items-center gap-2">
+                <Button 
+                  onClick={generateMusic}
+                  disabled={isGeneratingMusic}
+                  className="flex items-center gap-2"
+                >
+                  <Music className="h-4 w-4" />
+                  {isGeneratingMusic ? 'Generating Music...' : 'Generate Music'}
+                </Button>
+                
+                {generatedMusic && (
+                  <div className="mt-2 w-full">
+                    <audio 
+                      controls
+                      src={generatedMusic}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Center area - Enhanced animations */}
@@ -895,6 +967,29 @@ export default function VoiceJournal() {
             )}
           </div>
         </main>
+
+        {/* Add this before the closing div */}
+        {generatedImage && (
+          <div style={imageContainerStyle}>
+            <img 
+              src={generatedImage} 
+              alt="Generated visualization"
+              style={{
+                width: '100%',
+                height: 'auto',
+                borderRadius: '4px'
+              }}
+            />
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="absolute top-2 right-2"
+              onClick={() => setGeneratedImage(null)}
+            >
+              ×
+            </Button>
+          </div>
+        )}
       </div>
     </>
   )

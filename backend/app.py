@@ -11,6 +11,9 @@ from io import BytesIO
 import base64
 import sqlite3
 from datetime import datetime
+import shutil
+import os.path
+import time
 
 
 # Load environment variables from .env file
@@ -39,6 +42,29 @@ def init_db():
 AUDIO_UPLOAD_FOLDER = 'audio_uploads'
 if not os.path.exists(AUDIO_UPLOAD_FOLDER):
     os.makedirs(AUDIO_UPLOAD_FOLDER)
+
+# Global client variable
+musicgen_client = None
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
+
+def init_musicgen_client():
+    global musicgen_client
+    retry_count = 0
+    while retry_count < MAX_RETRIES:
+        try:
+            if musicgen_client is None:
+                print(f"Initializing MusicGen client (attempt {retry_count + 1}/{MAX_RETRIES})...")
+                musicgen_client = Client("https://facebook-musicgen.hf.space/")
+                print("MusicGen client initialized successfully")
+                return True
+        except Exception as e:
+            retry_count += 1
+            print(f"Warning: Could not initialize MusicGen client (attempt {retry_count}/{MAX_RETRIES}): {str(e)}")
+            if retry_count < MAX_RETRIES:
+                print(f"Retrying in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+    return False
 
 @app.route("/")
 def hello_world():
@@ -118,30 +144,23 @@ def image():
     )
 
 def get_image(journal_entry):
-    try:
-        model = genai.GenerativeModel('gemini-pro-vision')
-        prompt = f"""
-        Below is a journal entry. Your job is to read it and create a line-art cartoon to visualize. Make it positive even if it is bad.
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    response = client.models.generate_content(
+        model="gemini-2.0-flash-exp-image-generation",
+        contents=journal_entry,
+        config=types.GenerateContentConfig(
+            response_modalities=['Text', 'Image']
+        )
+    )
 
-        Journal Entry:
-        {journal_entry}
-        """
-        
-        response = model.generate_content(prompt)
-        
-        # Extract image data from response
-        for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
-                image_data = base64.b64decode(part.inline_data.data)
-                image = Image.open(BytesIO(image_data))
-                return image  # Return the image object
-                
-        print("No image was generated")
-        return None
+    for part in response.candidates[0].content.parts:
+        if part.text is not None:
+            print(part.text)
+        elif part.inline_data is not None:
+            image = Image.open(BytesIO((part.inline_data.data)))
+            return image  # Return the image object directly
 
-    except Exception as e:
-        print("Error generating image:", str(e))
-        return None
+    return None  # Return None if no image was found
 
 # Define the function
 def get_mood_words(journal_entry):
@@ -230,6 +249,43 @@ def get_entries():
     except Exception as e:
         print("Error getting entries:", str(e))
         return jsonify({"error": "Failed to get entries"}), 500
+
+# Create a dictionary mapping emotions to static music files
+STATIC_MUSIC_FILES = {
+    "love": "music/1.wav",
+    "pride": "music/2.wav",
+    "angry": "music/3.wav",
+    # Map remaining emotions to the 3 files we have
+    "happy": "music/1.wav",
+    "excited": "music/2.wav",
+    "sad": "music/3.wav",
+    "neutral": "music/1.wav"
+}
+
+@app.route('/music', methods=['GET'])
+def music():
+    try:
+        text_description = request.args.get('text', default='A calm and peaceful sunset at the beach.', type=str)
+        
+        # Get the emotion for the text (we'll still log it)
+        emotion = get_emotion(text_description)
+        print(f"Using {emotion} music for: {text_description}")
+        
+        # Hard-coded path to the specific music file
+        audio_url = "http://127.0.0.1:5000/static/generated_music_-9114550563102685119.wav"
+        
+        return jsonify({
+            "audioUrl": audio_url
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Failed to get music: {str(e)}"
+        }), 500
+
+# Add this to serve static files
+app.static_folder = 'static'
+app.static_url_path = '/static'
 
 # Initialize database when starting the app
 if __name__ == '__main__':
